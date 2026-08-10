@@ -43,7 +43,7 @@
 
 ## Description
 
-A lightweight, RFC8484-compatible DNS-over-HTTPS (DoH) proxy service for OpenWrt with minimal footprint and seamless integration. It does not support outdated JSON API (by design), keeping the package lean and fast. The optional Web UI (`luci-app-https-dns-proxy`) provides access to an extensive built-in list of [more than 40 public DoH resolvers](https://github.com/stangri/source.mossdef.org/tree/master/luci-app-https-dns-proxy/root/usr/share/https-dns-proxy/providers) for easy configuration. Based on [@aarond10](https://github.com/aarond10)'s [https-dns-proxy](https://github.com/aarond10/https_dns_proxy).
+A lightweight, RFC8484-compatible DNS-over-HTTPS (DoH) proxy service for OpenWrt with minimal footprint and seamless integration. It does not support outdated JSON API (by design), keeping the package lean and fast. The optional Web UI (`luci-app-https-dns-proxy`) provides access to an extensive built-in list of [more than 40 public DoH resolvers](https://github.com/mossdef-org/luci-app-https-dns-proxy/tree/main/root/usr/share/https-dns-proxy/providers) for easy configuration. Based on [@aarond10](https://github.com/aarond10)'s [https-dns-proxy](https://github.com/aarond10/https_dns_proxy).
 
 Key advantages:
 
@@ -59,7 +59,7 @@ Key advantages:
 - Compact size (about 40Kb installed).
 - (By default) automatically updates `dnsmasq` settings to use DoH proxy when it's started and reverts to old `dnsmasq` resolvers when DoH proxy is stopped.
 - (By default) automatically adds records for canary domains[<sup>1</sup>](https://support.mozilla.org/en-US/kb/canary-domain-use-application-dnsnet)<sup>,</sup>[<sup>2</sup>](https://developer.apple.com/support/prepare-your-network-for-icloud-private-relay) upon start and removes them upon service stop.
-- Web UI (`luci-app-https-dns-proxy`) available. [More than 40 public resolvers](https://github.com/stangri/source.mossdef.org/tree/master/luci-app-https-dns-proxy/root/usr/share/https-dns-proxy/providers) are supported within the WebUI for easy configuration.
+- Web UI (`luci-app-https-dns-proxy`) available. [More than 40 public resolvers](https://github.com/mossdef-org/luci-app-https-dns-proxy/tree/main/root/usr/share/https-dns-proxy/providers) are supported within the WebUI for easy configuration.
 
 ## Screenshots (luci-app-https-dns-proxy)
 
@@ -101,7 +101,7 @@ opkg update; opkg install https-dns-proxy luci-app-https-dns-proxy;
 
 ## Pre-Release/Testing Versions
 
-The binaries newer than those in OpenWrt repositories for both most recent OpenWrt release and OpenWrt snapshots can usually be found at the [GitHub Releases](https://github.com/stangri/https-dns-proxy/releases) page.
+The binaries newer than those in OpenWrt repositories for both most recent OpenWrt release and OpenWrt snapshots can usually be found at the [GitHub Releases](https://github.com/mossdef-org/https-dns-proxy/releases) page.
 
 ## Default Settings
 
