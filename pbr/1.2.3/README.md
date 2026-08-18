@@ -100,6 +100,7 @@
     - [A Word About Compatibility With Other Policy Routing Services](#a-word-about-compatibility-with-other-policy-routing-services)
     - [A Word About uplink_ip_rules_priority](#a-word-about-uplink_ip_rules_priority)
     - [A Word About the Maximum Number of Interfaces/Tunnels](#a-word-about-the-maximum-number-of-interfacestunnels)
+    - [A Word About Negating Policy Options](#a-word-about-negating-policy-options)
   - [Getting Help](#getting-help)
   - [First Troubleshooting Step](#first-troubleshooting-step)
   - [Donate](#donate)
@@ -130,6 +131,9 @@ This README is relevant for the `pbr` version 1.2.3. If you're looking for the R
 - DNS policies without an explicit `dest_dns_port` generate valid `nft` syntax again.
 - The `pbr` chain cleanup no longer touches `fw4`'s own `forward`/`output`/`dstnat` base chains, which could previously break LAN↔WAN forwarding and NAT port forwards.
 - Policies mixing negated and non-negated entries in `src_addr`/`dest_addr` (for example `!192.168.1.5 192.168.1.0/24`) are classified correctly.
+- Negated entries in `src_addr`/`dest_addr` now act as exclusions on the rest of the policy instead of getting a rule of their own. A policy such as `192.168.1.0/24 !192.168.1.5` previously added a rule meaning "any source except `192.168.1.5`", which matched almost everything and sent the whole network over that interface. Exclusions are now attached to the policy's own entries, the way they always were for `src_port`/`dest_port`, so that policy now matches every source in `192.168.1.0/24` except `192.168.1.5`. A policy made up of negated entries alone is unchanged and still means "everything except these". See [A Word About Negating Policy Options](#a-word-about-negating-policy-options).
+- Negated domain names in `dest_addr` (for example `!example.com`) work again. The rule referred to an `nft` set that was never created, which made the whole `pbr` ruleset fail to load, so a single such policy could stop all policy routing. Upgrading is enough — the affected ruleset never installed, so there is nothing left behind to clean up, and any set left over from an earlier run is removed on the next start.
+- Editing the domain names in a policy now clears the addresses the old ones had resolved to. Previously those addresses stayed behind in the policy's `nft` set, so a domain you removed from a policy kept being routed by it — until the router was rebooted, unless [nft_set_timeout](#nft_set_timeout) was configured. Disabling the policy did clear them, which is why the two appeared to behave differently. Sets whose domain list has not changed keep their addresses across a reload, as before.
 
 ### Version 1.2.2
 
@@ -437,7 +441,7 @@ Each policy can result in a new `nft` rule and possibly an anonymous/in-line or 
 
 Each DNS policy can result in either a new `nft` rule and possibly an anonymous/in-line or a named `nft` `set` to match `src_addr`.
 
-If the IP adresses (either legacy IPv4 or IPv6 family or both) are defined in the `dest_dns` setting for the dns policy, than those addresses will be used to explicitly set the resolver address for a specific DNS policy.
+If the IP addresses (either legacy IPv4 or IPv6 family or both) are defined in the `dest_dns` setting for the dns policy, then those addresses will be used to explicitly set the resolver address for a specific DNS policy.
 
 If the network interface is defined in the `dest_dns` setting for the dns policy, then the first matching-family (either IPv4 or IPv6) DNS server will be used for a specific DNS policy.
 
@@ -628,7 +632,7 @@ Default configuration has service disabled (use Web UI to enable/start service o
 
 Each policy may have a combination of the options below, the `name` and `interface` options are required.
 
-The `src_addr`, `src_port`, `dest_addr` and `dest_port` options supports parameter negation, for example if you want to **exclude** remote port 80 from the policy, set `dest_port` to `"!80"` (notice lack of space between `!` and parameter).
+The `src_addr`, `src_port`, `dest_addr` and `dest_port` options supports parameter negation, for example if you want to **exclude** remote port 80 from the policy, set `dest_port` to `"!80"` (notice lack of space between `!` and parameter). A negated entry is an exclusion applied to the whole policy rather than a match of its own — see [A Word About Negating Policy Options](#a-word-about-negating-policy-options), which also covers the two cases where an exclusion is narrower than it looks.
 
 | Option        | Default    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1268,6 +1272,93 @@ Widening the mask raises the first term — `fw_mask=ffff0000` with `uplink_mark
 Additionally, in [netifd integration](#netifd-integration) mode the LAN rules are installed at `uplink_ip_rules_priority + 1000` and upwards. Keep `uplink_ip_rules_priority` at or below roughly `31000` in that mode, otherwise those rules land beyond the kernel's `main` (32766) and `default` (32767) rules and are never reached.
 
 The practical recommendation is to leave `fw_mask` and `uplink_mark` at their defaults unless you genuinely need more than 255 routed interfaces, which is far beyond what any normal deployment uses.
+
+### A Word About Negating Policy Options
+
+The `src_addr`, `dest_addr`, `src_port` and `dest_port` options accept negated entries, written with a `!` immediately before the value and no space after it. A negated entry is an **exclusion applied to the whole policy**, not a match in its own right.
+
+Positive entries are combined with OR, negated entries with AND:
+
+```text
+config policy
+  option name 'lan-to-wan'
+  option interface 'wan'
+  option src_addr '192.168.1.0/24 10.0.0.0/24 @br-lan @br-guest !192.168.1.5'
+```
+
+routes traffic coming from `192.168.1.0/24` **or** `10.0.0.0/24` **or** the `br-lan` and `br-guest` devices, in every case **except** traffic from `192.168.1.5`.
+
+A policy made up of negated entries alone is a valid catch-all: `dest_port '!80'` means "every destination port except 80".
+
+#### Why one policy produces several `nft` rules
+
+`nft` has no OR between the match expressions of a single rule — everything in a rule must match at once. So each *type* of positive entry (physical device, MAC address, domain, IPv4, IPv6) becomes a rule of its own, and the policy's exclusions are repeated on each of them. `nft list chain inet fw4 pbr_prerouting` shows the policy above as:
+
+```text
+iifname { "br-lan", "br-guest" } ip saddr != 192.168.1.5 goto pbr_mark_0x010000 comment "lan-to-wan"
+meta nfproto ipv6 iifname { "br-lan", "br-guest" } goto pbr_mark_0x010000 comment "lan-to-wan"
+ip saddr { 10.0.0.0/24, 192.168.1.0/24 } ip saddr != 192.168.1.5 goto pbr_mark_0x010000 comment "lan-to-wan"
+```
+
+This is expected. Several rules per policy does not mean the policy has been duplicated.
+
+The `meta nfproto ipv6` on the second rule is there because `iifname` says nothing about the address family: without it, that rule would also match the IPv4 packets the first rule just excluded, letting `192.168.1.5` back into the policy. `pbr` adds the matching `meta nfproto ipv4` to the first rule as well, but `nft` does not print it — the `ip saddr` match already implies it.
+
+#### An exclusion only applies within its own address family
+
+`!192.168.1.5` is an IPv4 address, so it can only be compared against an IPv4 source and is attached only to the policy's IPv4 rules. The same host's IPv6 traffic is unaffected and is still routed by the policy — that is the second rule in the listing above, which carries no exclusion at all.
+
+To exclude a dual-stack host completely, either exclude it by MAC address, or list both its IPv4 and its IPv6 address as separate negated entries.
+
+#### A MAC exclusion restricts the whole policy to Ethernet traffic
+
+`ether saddr` reads the source MAC out of the packet's Ethernet header. In `nft`, matching a header field that is not present in the packet is a **non-match**, and that applies to `!=` exactly as it does to `=`. A rule carrying `ether saddr != ...` therefore never matches a packet that arrived without an Ethernet header.
+
+Because exclusions are attached to every rule of the policy, adding a MAC exclusion constrains the policy's *other* rules too — including the ones that match on IP addresses:
+
+```text
+config policy
+  option name 'subnet-to-wan'
+  option interface 'wan'
+  option src_addr '192.168.9.0/24 !11:22:33:44:55:66'
+```
+
+```text
+ip saddr 192.168.9.0/24 ether saddr != 11:22:33:44:55:66 goto pbr_mark_0x010000 comment "subnet-to-wan"
+```
+
+That rule only matches traffic that reached the router over an Ethernet-like interface — a bridge, a LAN port, WiFi. Traffic arriving over a tunnel (WireGuard, OpenVPN `tun`, GRE and similar) has no Ethernet header, so the policy will not match it at all, even though the source address is in `192.168.9.0/24`.
+
+If a policy's sources can arrive over a tunnel, do not exclude by MAC address. Exclude the host by IP address instead, or move the MAC exclusion into a separate policy targeting the [ignore](#ignore-target) interface, placed above this one.
+
+A positive MAC entry carries the same requirement, which is unsurprising: you cannot match a MAC address on a packet that has no Ethernet header.
+
+#### Negated domain names
+
+Domain entries are matched by **address, not by name**. `pbr` has `dnsmasq` add every address it resolves for a domain to an `nft` set, and the rule matches on that set. A negated domain gets a second set of its own, so the rule reads "in the policy's set, but not in the exclusion set".
+
+An entry for `example.com` catches `example.com` and all of its subdomains (see [Use DNSMASQ nft sets Support](#use-dnsmasq-nft-sets-support)) — but only where no more specific entry exists, because `dnsmasq` applies the **most specific** matching entry rather than every matching one. That is what makes the useful case work:
+
+```text
+config policy
+  option name 'example-to-wan'
+  option interface 'wan'
+  option dest_addr 'example.com !ads.example.com'
+```
+
+`ads.example.com` is the more specific entry of the two, so a lookup for it goes to the exclusion set and its addresses never enter the policy's set at all. The policy routes the rest of `example.com` and leaves that traffic alone.
+
+Note where the work happens: for a subdomain exception the carve-out is done by `dnsmasq`, when it decides which set an answer belongs in — not by the `!=` in the `nft` rule. The `!=` earns its place in the other arrangements: a negated domain alongside non-domain entries such as a subnet or a port, or a policy consisting of the negation alone.
+
+Excluding a domain unrelated to anything the policy matches does nothing. The two sets never come to hold the same addresses, so there is nothing for the exclusion to remove. A negated domain is only meaningful where it can overlap something the policy already matches — in practice a subdomain of a domain the policy covers, or an address the policy matches for another reason such as a subnet or a port.
+
+Three things to be aware of:
+
+- **Addresses, not names.** If the excluded name resolves to the same address as the domain you are routing — a shared CDN front end, several sites on one host — that address lands in both sets, and the exclusion removes the parent domain along with it. Nothing warns you when this happens. For example `dest_addr 'google.com !drive.google.com'` does nothing useful: both names answer with the same address, so it ends up in both sets and the rule matches neither name. The exception is dependable only when the excluded name has addresses of its own, as an advertising or telemetry subdomain usually does.
+- **An exclusion is empty until the name has been resolved through the router.** An empty set excludes nothing, so traffic you meant to carve out is routed by the policy until a local client looks the name up via the router's `dnsmasq`. For a positive domain policy the same delay only means the policy has not started working yet; for an exclusion it means the exclusion leaks. The `pbr.user.dnsprefetch` [custom user file](#custom-user-files) resolves policy domains in advance and avoids this, and [<sup>#5</sup>](#footnote5) applies here as well.
+- **The sets only grow.** Unless [nft_set_flags_timeout](#nft_set_flags_timeout) is set, an address is never removed once added. A service that rotates its addresses keeps presenting ones the exclusion set has not seen, and those leak into the policy until they too are resolved through the router.
+
+This all concerns `dest_addr`. Domain names in `src_addr` are not handled by the resolver's set support at all — they are resolved once when the service starts and become a fixed list, so a negated source domain excludes only the addresses the name had at that moment.
 
 ## Getting Help
 
